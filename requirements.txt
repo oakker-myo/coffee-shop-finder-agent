@@ -1,0 +1,5 @@
+agent-framework==1.19.0
+azure-identity==1.25.3
+mcp==1.30.0
+python-dotenv==1.2.3
+tzdata==2026.4

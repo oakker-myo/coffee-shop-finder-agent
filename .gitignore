@@ -1,0 +1,17 @@
+# Security / secrets
+.env
+.env.*
+!.env.sample
+.git/
+
+# Python
+__pycache__/
+.venv/
+venv/
+*.pyc
+*.pyo
+.mypy_cache/
+.pytest_cache/
+
+# Data
+data/shops.json

@@ -1,0 +1,49 @@
+[
+  {
+    "id": "sample-roasters",
+    "name": "Sample Roasters",
+    "postcode": "WC2N 5DN",
+    "lat": 51.5080,
+    "lng": -0.1281,
+    "website": "https://example.com",
+    "menu_url": "https://example.com/menu",
+    "hours": {
+      "mon": [["07:30", "17:00"]],
+      "tue": [["07:30", "17:00"]],
+      "wed": [["07:30", "17:00"]],
+      "thu": [["07:30", "17:00"]],
+      "fri": [["07:30", "17:00"]],
+      "sat": [["09:00", "16:00"]],
+      "sun": []
+    },
+    "prices": { "espresso": 2.80, "flat_white": 3.60, "latte": 3.90, "iced_latte": 4.20 },
+    "rating": 4.6,
+    "rating_checked": "2026-09-23",
+    "review_count": 250,
+    "my_rank": 1,
+    "my_notes": "Example notes: best filter nearby, busy 12-2 weekdays."
+  },
+  {
+    "id": "example-espresso-bar",
+    "name": "Example Espresso Bar",
+    "postcode": "WC2E 8RF",
+    "lat": 51.5117,
+    "lng": -0.1240,
+    "website": "https://example.org",
+    "hours": {
+      "mon": [["08:00", "15:00"]],
+      "tue": [["08:00", "15:00"]],
+      "wed": [["08:00", "15:00"]],
+      "thu": [["08:00", "15:00"]],
+      "fri": [["08:00", "18:00"]],
+      "sat": [["10:00", "14:00"]],
+      "sun": [["10:00", "14:00"]]
+    },
+    "prices": { "latte": 3.70, "iced_latte": 4.40 },
+    "rating": 4.3,
+    "rating_checked": "2026-09-23",
+    "review_count": 90,
+    "my_rank": 2,
+    "my_notes": "Example notes: quick takeaway, open Sundays."
+  }
+]
