@@ -1,6 +1,8 @@
 import sys
 import asyncio
 import logging
+import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from datetime import datetime
 from typing import Any
@@ -8,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from agent_framework import Agent, AgentSession, ContextProvider, InMemoryHistoryProvider, SessionContext
 from agent_framework import MCPStdioTool
+from agent_framework import FunctionInvocationContext
 
 import config
 
@@ -62,6 +65,16 @@ def make_client():
             base_url=config.OPENAI_BASE_URL,
         )
 
+    if config.PROVIDER == "azure_openai":
+        from agent_framework.openai import OpenAIChatCompletionClient
+
+        return OpenAIChatCompletionClient(
+            model=config.AZURE_OPENAI_MODEL,
+            azure_endpoint=config.AZURE_OPENAI_ENDPOINT,
+            api_key=config.AZURE_OPENAI_API_KEY,
+        )
+
+
     from agent_framework.foundry import FoundryChatClient
     from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
 
@@ -84,6 +97,23 @@ def make_shop_mcp() -> MCPStdioTool:
     )
 
 
+tool_log = logging.getLogger("agent.tools")
+
+async def trace_tool_calls(context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]],) -> None:
+    """Logs each tool call with its arguments, duration and a preview of the result."""
+    name = context.function.name
+    start = time.perf_counter()
+    try:
+        await call_next()
+    except Exception as exc:
+        tool_log.warning("%s(%s) failed after %.0fms: %s", name, context.arguments, (time.perf_counter() - start) * 1000, exc)
+        raise
+    result = context.result
+    if isinstance(result, list):
+        result = " ".join(c.text for c in result if getattr(c, "text", None))
+    tool_log.info("%s(%s) %.0fms -> %.1500s", name, context.arguments, (time.perf_counter() - start) * 1000, result) # cut off at 1500 characters
+
+
 def init_agent():
     global _agent
     _agent = Agent(
@@ -95,6 +125,8 @@ def init_agent():
             ClockProvider(config.TIMEZONE),
         ],
         tools=[make_shop_mcp()],
+        middleware=[trace_tool_calls],
+        default_options={"reasoning_effort": config.REASONING_EFFORT},
     )
 
 
@@ -104,6 +136,7 @@ def get_agent():
 
 async def main() -> None:
     logging.basicConfig(level=logging.WARNING)
+    logging.getLogger("agent.tools").setLevel(logging.INFO if config.ENV == "dev" else logging.WARNING)
     init_agent()
     
     async with get_agent() as agent:
