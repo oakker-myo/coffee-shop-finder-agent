@@ -2,6 +2,7 @@
 
 import json
 import config
+import difflib
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -39,27 +40,43 @@ def get_shop(shop_id: str) -> dict:
     for shop in shops:
         if shop["id"] == shop_id:
             return shop
-    known = ", ".join(s["id"] for s in shops)
-    raise ValueError(f"No shop with id '{shop_id}'. Known ids: {known}")
+    return {
+                "error": f"No shop with id '{shop_id}'.",
+                "known_shops": [{"id": s["id"], "name": s["name"]} for s in shops],
+            }
+
 
 
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+def _next_open(hours: dict, day: str, time: str) -> str:
+    """First opening after `day time`, looking up to a week ahead."""
+    start = DAYS.index(day)
+    for offset in range(8):  # 0 = later the same day, 7 = same day next week
+        d = DAYS[(start + offset) % 7]
+        for opens, _ in hours.get(d) or []:
+            if offset > 0 or opens > time:
+                return f"next {d} {opens}" if offset == 7 else f"{d} {opens}"
+    return "No opening hours recorded this week"
+
 
 @mcp.tool()
 def open_shops(day: str | None = None, time: str | None = None) -> dict:
     """
         Check which cafes are open on a given day and time. Leave both empty for right now.
         day: mon, tue, wed, thu, fri, sat or sun. time: 24-hour HH:MM, e.g. 14:30.
+        Closed cafes include next_open, the next day and time they open.
+        Use this for "when does X open next", rather than working it out from get_shop.
     """
     now = datetime.now(ZoneInfo(config.TIMEZONE))
     day = (day or DAYS[now.weekday()]).lower()[:3]
     if day not in DAYS:
-        raise ValueError(f"day must be one of: {', '.join(DAYS)}")
+        return {"error": f"Unknown day '{day}'.", "valid_days": DAYS}
     try:
         # Normalises "9:05" to "09:05"
         time = datetime.strptime(time, "%H:%M").strftime("%H:%M") if time else now.strftime("%H:%M")
     except ValueError:
-        raise ValueError("time must be 24-hour HH:MM, e.g. 14:30") from None
+        return {"error": f"Invalid time '{time}'. Use 24-hour HH:MM, e.g. 14:30."}
 
     open_, closed, unknown = [], [], []
     for shop in _load():
@@ -79,27 +96,43 @@ def open_shops(day: str | None = None, time: str | None = None) -> dict:
                 status = "closed for the rest of the day"
             else:
                 status = "closed all day"
-            closed.append({**entry, "status": status})
+            closed.append({**entry, "status": status, "next_open": _next_open(shop.get("hours", {}), day, time)})
 
     return {"checked": f"{day} {time}", "open": open_, "closed": closed, "hours_unknown": unknown}
 
 
-DRINKS = ["latte", "iced_latte", "iced_spanish_latte"]
-
 @mcp.tool()
-def compare_prices(drink: str) -> dict:
+def compare_prices(drink: str | None = None) -> dict:
     """
-        Rank the cafes by price for one drink, cheapest first.
-        drink: latte, iced_latte or iced_spanish_latte.
-        Cafes with no recorded price for the drink are listed separately.
+        Rank drink prices across the cafes, cheapest first.
+        With a drink (e.g. latte, iced latte): every cafe's price for it, plus cafes with no recorded price.
+        Without a drink: every priced drink at every cafe. Use this for "cheapest drink" or "what drinks are there".
     """
-    # Normalise drinks to the keys above.
+    shops = _load()
+
+    # Models sometimes send "" to mean "no drink".
+    if drink is None or not drink.strip():
+        items = [
+            {"id": s["id"], "name": s["name"], "drink": d, "price": p}
+            for s in shops
+            for d, p in s.get("prices", {}).items()
+        ]
+        items.sort(key=lambda i: i["price"])
+        return {"cheapest_first": items}
+
+    # "Iced Latte", "iced-latte" and "lattes" all normalise to the JSON keys.
     drink = drink.strip().lower().replace(" ", "_").replace("-", "_").removesuffix("s")
-    if drink not in DRINKS:
-        raise ValueError(f"drink must be one of: {', '.join(DRINKS)}")
+    known = sorted({d for s in shops for d in s.get("prices", {})})
+    if drink not in known:
+        # Typos like "iced spanis latte" still match; unrelated drinks don't.
+        close = difflib.get_close_matches(drink, known, n=1, cutoff=0.8)
+        if not close:
+            return {"error": f"No prices recorded for '{drink}'.", "drinks_with_prices": known}
+        drink = close[0]
+
 
     priced, missing = [], []
-    for shop in _load():
+    for shop in shops:
         entry = {"id": shop["id"], "name": shop["name"]}
         price = shop.get("prices", {}).get(drink)
         if price is None:
