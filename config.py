@@ -23,3 +23,8 @@ AZURE_OPENAI_MODEL = os.getenv("AZURE_OPENAI_MODEL")
 REASONING_EFFORT = os.getenv("REASONING_EFFORT")
 
 APPLICATIONINSIGHTS_CONNECTION_STRING = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
+
+ORS_API_KEY = os.getenv("ORS_API_KEY")  # OpenRouteService, unset = straight-line estimates only
+# Optional "lat,lng" that biases place-name searches towards an area
+_focus = os.getenv("GEOCODE_FOCUS")
+GEOCODE_FOCUS = tuple(float(x) for x in _focus.split(",")) if _focus else None

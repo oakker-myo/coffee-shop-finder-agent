@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
+from tools.geo import locate
 
 from agent_framework import Agent, AgentSession, ContextProvider, InMemoryHistoryProvider, SessionContext
 from agent_framework import MCPStdioTool
@@ -34,6 +35,12 @@ INSTRUCTIONS = """
 
                     When comparing shops, state the figures you used so the user can see why one won. 
                     If data is missing for a shop, say it is missing rather than dropping the shop silently.
+
+                    For distance or walking-time questions you need to know where the user is: a postcode or a place name.
+                    If they have not given one in this conversation, ask for it. Never guess or assume their location.
+                    When a place name is matched, say which place you used.
+                    Only look up places the user actually named. If a place cannot be found, ask the user, never substitute a different place.
+
 
                     Keep answers short. A recommendation and one line of reasoning beats a table.
 
@@ -77,7 +84,6 @@ def make_client():
             azure_endpoint=config.AZURE_OPENAI_ENDPOINT,
             api_key=config.AZURE_OPENAI_API_KEY,
         )
-
 
     from agent_framework.foundry import FoundryChatClient
     from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
@@ -128,7 +134,7 @@ def init_agent():
             InMemoryHistoryProvider("memory", load_messages=True, store_inputs=True, store_outputs=True),
             ClockProvider(config.TIMEZONE),
         ],
-        tools=[make_shop_mcp()],
+        tools=[make_shop_mcp(), locate],
         middleware=[trace_tool_calls],
         default_options={"reasoning_effort": config.REASONING_EFFORT},
     )
@@ -153,7 +159,8 @@ async def main() -> None:
                 break
             if question:
                 result = await agent.run(question, session=session)
-                print(f"\nAgent> {result.text or '(no response)'}\n")
+                print(f"\nAgent> {result.messages[-1].text or '(no response)'}\n")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

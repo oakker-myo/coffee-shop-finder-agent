@@ -2,6 +2,7 @@
   {
     "id": "sample-roasters",
     "name": "Sample Roasters",
+    "address": "Trafalgar Square, London",
     "postcode": "WC2N 5DN",
     "lat": 51.5080,
     "lng": -0.1281,
@@ -26,6 +27,7 @@
   {
     "id": "example-espresso-bar",
     "name": "Example Espresso Bar",
+    "address": "Covent Garden Piazza, London",
     "postcode": "WC2E 8RF",
     "lat": 51.5117,
     "lng": -0.1240,
