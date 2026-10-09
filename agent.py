@@ -157,11 +157,16 @@ async def limit_fetches(context: FunctionInvocationContext, call_next: Callable[
     await call_next()
 
 
+MAX_TOOL_CALLS_PER_TURN = 12
+
 def init_agent():
     global _agent
+    client = make_client()
+    # Stops a looping model; the framework then forces a text answer (tool_choice="none").
+    client.function_invocation_configuration["max_function_calls"] = MAX_TOOL_CALLS_PER_TURN
     _agent = Agent(
         name="CoffeeShopFinderAgent",
-        client=make_client(),
+        client=client,
         instructions=INSTRUCTIONS,
         context_providers=[
             InMemoryHistoryProvider("memory", load_messages=True, store_inputs=True, store_outputs=True),
