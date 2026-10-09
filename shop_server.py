@@ -324,12 +324,17 @@ def _html_to_text(html: str) -> str:
 @mcp.tool()
 async def fetch_shop_page(shop_id: str, page: Literal["website", "menu"] = "website") -> dict:
     """
-        Read a cafe's own website or menu page, live. Use this for things get_shop doesn't have: food, specials, events, news, or whether the menu has changed.
-        Use get_shop for hours, prices and the user's notes.
+        Read a cafe's own website or menu page, live. 
+        Use this for things get_shop doesn't have:food, specials, events, news, or whether the menu has changed.
+        Use get_shop for hours, prices and the user's notes. shop_id must be an id from list_shops.
     """
-    shop = next((s for s in _load() if s["id"] == shop_id), None)
+    shops = _load()
+    shop = next((s for s in shops if s["id"] == shop_id), None)
     if shop is None:
-        return {"error": f"No shop with id '{shop_id}'.", "hint": "Call list_shops for valid ids."}
+        return {
+            "error": f"No shop with id '{shop_id}'.",
+            "known_shops": [{"id": s["id"], "name": s["name"]} for s in shops],
+        }
     url = shop.get("menu_url" if page == "menu" else "website")
     if not url:
         hint = "Try page='website' instead." if page == "menu" else FETCH_HINT
