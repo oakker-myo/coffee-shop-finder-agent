@@ -8,7 +8,7 @@ import httpx
 import re
 from html.parser import HTMLParser
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import Literal
 
@@ -65,18 +65,70 @@ def _next_open(hours: dict, day: str, time: str) -> str:
     return "No opening hours recorded this week"
 
 
+BANK_HOLIDAYS_URL = "https://www.gov.uk/bank-holidays.json"
+_holidays: dict[str, str] = {}  # "YYYY-MM-DD" -> title, England and Wales
+_holidays_next_fetch: datetime | None = None
+
+async def _holiday_note(when) -> str | None:
+    """A ready phrase if `when` is a bank holiday, or None. Refreshes the gov.uk list weekly."""
+    global _holidays, _holidays_next_fetch
+    now = datetime.now()
+    if _holidays_next_fetch is None or now >= _holidays_next_fetch:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                response = await client.get(BANK_HOLIDAYS_URL)
+            response.raise_for_status()
+            events = response.json()["england-and-wales"]["events"]
+            _holidays = {e["date"]: e["title"] for e in events}
+            _holidays_next_fetch = now + timedelta(days=7)
+        except (httpx.HTTPError, KeyError, ValueError):
+            # Keep any list we already have; try again in an hour rather than on every call.
+            _holidays_next_fetch = now + timedelta(hours=1)
+    if not _holidays:
+        return "Bank holidays couldn't be checked; hours may differ on a bank holiday."
+    title = _holidays.get(when.isoformat())
+    if not title:
+        return None
+    return f"{when:%A %d %B} is {title}, a bank holiday: these are normal {when:%A} hours, and cafes may keep different ones."
+
+
 @mcp.tool()
-def open_shops(day: str | None = None, time: str | None = None) -> dict:
+async def open_shops(day: str | None = None, time: str | None = None, date: str | None = None) -> dict:
     """
-        Check which cafes are open on a given day and time. Leave both empty for right now.
+        Check which cafes are open. Leave all empty for right now.
+        With a day or date but no time: each cafe's hours for that whole day.
         day: mon, tue, wed, thu, fri, sat or sun. time: 24-hour HH:MM, e.g. 14:30.
+        date: YYYY-MM-DD, for a specific date or a holiday such as Christmas Day; it replaces day.
         Closed cafes include next_open, the next day and time they open.
-        Use this for "when does X open next", rather than working it out from get_shop.
+        Use this for any "is it open" question, rather than reading hours from get_shop.
     """
+    whole_day = time is None and (date is not None or day is not None)
     now = datetime.now(ZoneInfo(config.TIMEZONE))
-    day = (day or DAYS[now.weekday()]).lower()[:3]
+    when = None
+    if date:
+        try:
+            when = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            return {"error": f"Invalid date '{date}'. Use YYYY-MM-DD, e.g. 2026-12-25."}
+    elif day is None:
+        when = now.date()
+    day = DAYS[when.weekday()] if when else day.lower()[:3]
     if day not in DAYS:
         return {"error": f"Unknown day '{day}'.", "valid_days": DAYS}
+    label = f"{day} {when:%d %b %Y}" if when else day
+    note = await _holiday_note(when) if when else None
+    if whole_day:
+        hours = []
+        for shop in _load():
+            ranges = shop.get("hours", {}).get(day)
+            if ranges is None:
+                text = "hours not recorded"
+            elif ranges:
+                text = ", ".join(f"{start}-{end}" for start, end in ranges)
+            else:
+                text = "closed all day"
+            hours.append({"id": shop["id"], "name": shop["name"], "hours": text})
+        return {"checked": f"{label} (whole day)", "hours": hours, **({"note": note} if note else {})}
     try:
         # Normalises "9:05" to "09:05"
         time = datetime.strptime(time, "%H:%M").strftime("%H:%M") if time else now.strftime("%H:%M")
@@ -103,7 +155,8 @@ def open_shops(day: str | None = None, time: str | None = None) -> dict:
                 status = "closed all day"
             closed.append({**entry, "status": status, "next_open": _next_open(shop.get("hours", {}), day, time)})
 
-    return {"checked": f"{day} {time}", "open": open_, "closed": closed, "hours_unknown": unknown}
+    checked = f"{label} {time}"
+    return {"checked": checked, "open": open_, "closed": closed, "hours_unknown": unknown, **({"note": note} if note else {})}
 
 
 @mcp.tool()

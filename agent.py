@@ -2,6 +2,7 @@ import sys
 import asyncio
 import logging
 import time
+import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from datetime import datetime
@@ -11,8 +12,7 @@ from tools.geo import locate
 
 from agent_framework import Agent, AgentSession, ContextProvider, InMemoryHistoryProvider, SessionContext
 from agent_framework import MCPStdioTool
-from agent_framework import FunctionInvocationContext
-from agent_framework import AgentContext, FunctionInvocationContext
+from agent_framework import AgentContext, FunctionInvocationContext, Content
 
 import config
 
@@ -157,6 +157,36 @@ async def limit_fetches(context: FunctionInvocationContext, call_next: Callable[
     await call_next()
 
 
+async def capture_holiday_note(context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]]) -> None:
+    """Keeps the bank holiday note from open_shops so it can be added to the answer."""
+    await call_next()
+    if context.function.name != "open_shops" or context.session is None:
+        return
+    result = context.result
+    if isinstance(result, list):  # MCP tools return content items
+        result = " ".join(c.text for c in result if getattr(c, "text", None))
+    try:
+        note = json.loads(result).get("note")
+    except (TypeError, ValueError, AttributeError):
+        return
+    if note:
+        context.session.state.setdefault("holiday_notes", []).append(note)
+
+
+async def add_holiday_note(context: AgentContext, call_next: Callable[[], Awaitable[None]]) -> None:
+    """Adds open_shops' bank holiday note to the answer when the model left it out."""
+    if context.session is not None:
+        context.session.state["holiday_notes"] = []
+    await call_next()
+    if context.session is None or context.stream:
+        return
+    notes = list(dict.fromkeys(context.session.state.get("holiday_notes", [])))  # de-duplicated, in order
+    messages = getattr(context.result, "messages", None)
+    if not notes or not messages or "bank holiday" in messages[-1].text.lower():
+        return
+    messages[-1].contents.append(Content.from_text("\n\nNote: " + " ".join(notes)))
+
+
 MAX_TOOL_CALLS_PER_TURN = 12
 
 def init_agent():
@@ -173,7 +203,7 @@ def init_agent():
             ClockProvider(config.TIMEZONE),
         ],
         tools=[make_shop_mcp(), locate],
-        middleware=[reset_fetch_budget, trace_tool_calls, limit_fetches],
+        middleware=[reset_fetch_budget, add_holiday_note, trace_tool_calls, limit_fetches, capture_holiday_note],
         default_options={"reasoning_effort": config.REASONING_EFFORT},
     )
 
