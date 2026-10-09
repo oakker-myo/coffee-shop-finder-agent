@@ -5,6 +5,8 @@ import config
 import difflib
 import math
 import httpx
+import re
+from html.parser import HTMLParser
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -263,6 +265,62 @@ async def _fetch(url: str) -> dict:
         return {"error": f"Could not reach the page ({type(e).__name__}).", "hint": FETCH_HINT}
 
 
+FETCH_MAX_CHARS = 4000
+FETCH_MIN_CHARS = 200
+TEXT_START = "<<<UNTRUSTED WEBSITE TEXT START>>>"
+TEXT_END = "<<<UNTRUSTED WEBSITE TEXT END>>>"
+
+SKIP_TAGS = {"script", "style", "noscript", "svg", "template", "iframe"}
+VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
+BLOCK_TAGS = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "header", "footer", "nav", "table", "ul", "ol", "dt", "dd"}
+
+class _TextExtractor(HTMLParser):
+    """Visible text only, with block tags turned into line breaks."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip_tag: str | None = None
+        self._skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if self._skip_tag:
+            # Count only the skipped tag, so an unclosed <p> inside it can't swallow the rest of the page.
+            if tag == self._skip_tag:
+                self._skip_depth += 1
+            return
+        attrs = dict(attrs)
+        style = (attrs.get("style") or "").replace(" ", "").lower()
+        # Hidden text is invisible to people but a common place to plant instructions.
+        hidden = "hidden" in attrs or attrs.get("aria-hidden") == "true" or "display:none" in style
+        if (tag in SKIP_TAGS or hidden) and tag not in VOID_TAGS:
+            self._skip_tag, self._skip_depth = tag, 1
+        elif tag in BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if self._skip_tag:
+            if tag == self._skip_tag:
+                self._skip_depth -= 1
+                if self._skip_depth == 0:
+                    self._skip_tag = None
+            return
+        if tag in BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self._skip_tag:
+            self.parts.append(data)
+
+
+def _html_to_text(html: str) -> str:
+    parser = _TextExtractor()
+    parser.feed(html)
+    parser.close()
+    lines = (" ".join(line.split()) for line in "".join(parser.parts).splitlines())
+    return "\n".join(line for line in lines if line)
+
+
 @mcp.tool()
 async def fetch_shop_page(shop_id: str, page: Literal["website", "menu"] = "website") -> dict:
     """
@@ -280,8 +338,17 @@ async def fetch_shop_page(shop_id: str, page: Literal["website", "menu"] = "webs
     result = await _fetch(url)
     if "error" in result:
         return result
-    # Temporary for 2a: 2b turns the HTML into capped, marked text.
-    return {"shop": shop["name"], "url": result["url"], "html_chars": len(result["html"])}
+    # Strip anything marker-like so the page can't close the untrusted block early.
+    text = re.sub(r"<{3,}|>{3,}", "", _html_to_text(result["html"]))
+    out = {"shop": shop["name"], "url": result["url"]}
+    if len(text) > FETCH_MAX_CHARS:
+        text = text[:FETCH_MAX_CHARS].rsplit("\n", 1)[0]
+        out["truncated"] = True
+    if len(text) < FETCH_MIN_CHARS:
+        out["note"] = ("Very little text on this page; it is probably built with JavaScript or shows the menu as images. "
+                       "Answer from get_shop data instead.")
+    out["content"] = f"{TEXT_START}\n{text}\n{TEXT_END}"
+    return out
 
 
 if __name__ == "__main__":
