@@ -8,6 +8,7 @@ import httpx
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 
@@ -218,6 +219,69 @@ async def nearest_shops(lat: float, lng: float) -> dict:
     if ranked and ranked[0]["walk_min"] > 60:
         result["note"] = "The nearest cafe is over an hour's walk away. Check with the user that the location is right."
     return result
+
+
+FETCH_TIMEOUT_S = 10
+FETCH_MAX_BYTES = 1_000_000
+FETCH_MAX_REDIRECTS = 3
+FETCH_TYPES = ("text/html", "text/plain")
+FETCH_HEADERS = {"User-Agent": "coffee-shop-finder-agent/0.1 (personal project)"}
+FETCH_HINT = "Tell the user the page couldn't be read, and answer from get_shop data instead."
+
+def _same_site(a: httpx.URL, b: httpx.URL) -> bool:
+    # example.com -> www.example.com is a normal redirect; another domain isn't.
+    return a.host.removeprefix("www.") == b.host.removeprefix("www.")
+
+
+async def _fetch(url: str) -> dict:
+    """GET a page on the cafe's own site. Returns {"url", "html"} or {"error", "hint"}."""
+    start = current = httpx.URL(url)
+    try:
+        async with httpx.AsyncClient(timeout=FETCH_TIMEOUT_S, headers=FETCH_HEADERS) as client:
+            for _ in range(FETCH_MAX_REDIRECTS + 1):
+                async with client.stream("GET", current) as response:
+                    if response.is_redirect:
+                        target = current.join(response.headers["location"])
+                        if target.scheme not in ("http", "https") or not _same_site(start, target):
+                            return {"error": f"The page redirects to another site ({target.host}).", "hint": FETCH_HINT}
+                        current = target
+                        continue
+                    if not response.is_success:
+                        return {"error": f"The site returned HTTP {response.status_code}.", "hint": FETCH_HINT}
+                    ctype = response.headers.get("content-type", "").split(";")[0].strip().lower()
+                    if ctype not in FETCH_TYPES:
+                        return {"error": f"The page isn't readable text ({ctype or 'unknown type'}).", "hint": FETCH_HINT}
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        body += chunk
+                        if len(body) >= FETCH_MAX_BYTES:
+                            break
+                    html = bytes(body[:FETCH_MAX_BYTES]).decode(response.charset_encoding or "utf-8", errors="replace")
+                    return {"url": str(current), "html": html}
+            return {"error": "The page redirects too many times.", "hint": FETCH_HINT}
+    except (httpx.HTTPError, httpx.InvalidURL, LookupError) as e:
+        return {"error": f"Could not reach the page ({type(e).__name__}).", "hint": FETCH_HINT}
+
+
+@mcp.tool()
+async def fetch_shop_page(shop_id: str, page: Literal["website", "menu"] = "website") -> dict:
+    """
+        Read a cafe's own website or menu page, live. Use this for things get_shop doesn't have: food, specials, events, news, or whether the menu has changed.
+        Use get_shop for hours, prices and the user's notes.
+    """
+    shop = next((s for s in _load() if s["id"] == shop_id), None)
+    if shop is None:
+        return {"error": f"No shop with id '{shop_id}'.", "hint": "Call list_shops for valid ids."}
+    url = shop.get("menu_url" if page == "menu" else "website")
+    if not url:
+        hint = "Try page='website' instead." if page == "menu" else FETCH_HINT
+        return {"error": f"No {page} page recorded for {shop['name']}.", "hint": hint}
+
+    result = await _fetch(url)
+    if "error" in result:
+        return result
+    # Temporary for 2a: 2b turns the HTML into capped, marked text.
+    return {"shop": shop["name"], "url": result["url"], "html_chars": len(result["html"])}
 
 
 if __name__ == "__main__":
