@@ -14,6 +14,6 @@ Follow these steps in order. Skip a step only when it says so.
    Only recommend cafes that are open then.
 3. **Distance.** Call `nearest_shops` with the lat and lng from `locate`.
 4. **Drink.** If they named a drink, call `compare_prices` with it.
-5. **Menu or specials.** Only if they asked: call `fetch_shop_page` for the cafe you are about to recommend, page "menu" first.
+5. **Menu or specials.** Only if they asked: call `ask_cafe_website` with a question that names the cafe you are about to recommend.
 6. **Choose one cafe.** Prefer, in order: open, then the shortest walk (if there is a location), then the cheapest for their drink, then the user's own rank.
 7. **Answer** using the format in the `references/ANSWER_FORMAT.md` resource.
