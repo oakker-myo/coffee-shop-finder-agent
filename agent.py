@@ -3,7 +3,8 @@ import asyncio
 import logging
 import time
 import json
-from collections.abc import Awaitable, Callable
+import difflib
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from datetime import datetime
 from typing import Any
@@ -11,7 +12,7 @@ from zoneinfo import ZoneInfo
 from tools.geo import locate
 
 from agent_framework import Agent, AgentSession, ContextProvider, InMemoryHistoryProvider, SessionContext
-from agent_framework import MCPStdioTool
+from agent_framework import MCPStdioTool, SkillsProvider
 from agent_framework import AgentContext, FunctionInvocationContext, Content
 
 import config
@@ -98,6 +99,37 @@ def make_client():
         credential=DefaultAzureCredential() if config.ENV == "dev" else ManagedIdentityCredential(),
     )
 
+
+SKILLS_DIR = Path(__file__).parent / "skills"
+
+SKILLS_PROMPT = """
+                    You have skills: step-by-step guides for particular kinds of request.
+
+                    <available_skills>
+                    {skills}
+                    </available_skills>
+
+                    When a request matches a skill's description, call `load_skill` with its name first, then follow its steps.
+                    {resource_instructions}
+                """
+
+SKILL_NAMES = sorted(p.parent.name for p in SKILLS_DIR.glob("*/SKILL.md"))
+
+async def fix_skill_name(context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]]) -> None:
+    """Small models garble skill names ('c' for 'cafe-outing'): resolve to a real one, or list the real ones."""
+    args = context.arguments
+    if context.function.name not in ("load_skill", "read_skill_resource") or not isinstance(args, Mapping):
+        await call_next()
+        return
+    name = str(args.get("skill_name", "")).strip().lower()
+    if name not in SKILL_NAMES:
+        matches = [s for s in SKILL_NAMES if name and s.startswith(name)]
+        matches = matches or difflib.get_close_matches(name, SKILL_NAMES, n=1, cutoff=0.6)
+        if len(matches) != 1:
+            context.result = {"error": f"No skill named '{name}'.", "available_skills": SKILL_NAMES}
+            return
+        context.arguments = {**args, "skill_name": matches[0]}
+    await call_next()
 
 SHOP_SERVER = Path(__file__).parent / "shop_server.py"
 
@@ -201,9 +233,15 @@ def init_agent():
         context_providers=[
             InMemoryHistoryProvider("memory", load_messages=True, store_inputs=True, store_outputs=True),
             ClockProvider(config.TIMEZONE),
+            SkillsProvider.from_paths(
+                SKILLS_DIR,
+                instruction_template=SKILLS_PROMPT,
+                disable_load_skill_approval=True,
+                disable_read_skill_resource_approval=True
+            ),
         ],
         tools=[make_shop_mcp(), locate],
-        middleware=[reset_fetch_budget, add_holiday_note, trace_tool_calls, limit_fetches, capture_holiday_note],
+        middleware=[reset_fetch_budget, add_holiday_note, trace_tool_calls, limit_fetches, capture_holiday_note, fix_skill_name],
         default_options={"reasoning_effort": config.REASONING_EFFORT},
     )
 
