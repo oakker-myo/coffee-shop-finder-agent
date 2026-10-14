@@ -1,0 +1,15 @@
+[
+  {
+    "query": "Is Sample Roasters open on Christmas Day 2026?",
+    "tools": [{"name": "open_shops", "arguments": {"date": "2026-12-25"}}],
+    "expected_phrase": "bank holiday"
+  },
+  {
+    "query": "Which cafe is nearest to WC2N 5DN?",
+    "tools": [{"name": "locate"}, {"name": "nearest_shops"}]
+  },
+  {
+    "query": "Where is the cheapest latte?",
+    "tools": [{"name": "compare_prices", "arguments": {"drink": "latte"}}]
+  }
+]
