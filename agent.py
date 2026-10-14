@@ -234,10 +234,12 @@ async def capture_holiday_note(context: FunctionInvocationContext, call_next: Ca
 
 async def add_holiday_note(context: AgentContext, call_next: Callable[[], Awaitable[None]]) -> None:
     """Adds open_shops' bank holiday note to the answer when the model left it out."""
-    if context.session is not None:
-        context.session.state["holiday_notes"] = []
+    if context.session is None:
+        # No caller session (e.g. evaluate_agent, or an API that sends none): give this run a throwaway one.
+        context.session = AgentSession()
+    context.session.state["holiday_notes"] = []
     await call_next()
-    if context.session is None or context.stream:
+    if context.stream:
         return
     notes = list(dict.fromkeys(context.session.state.get("holiday_notes", [])))  # de-duplicated, in order
     messages = getattr(context.result, "messages", None)
